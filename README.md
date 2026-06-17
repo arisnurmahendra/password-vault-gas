@@ -112,27 +112,15 @@ Konfigurasi personalisasi per akun pengguna.
 
 ### Desktop View
 
-> Add screenshot here
-
-```md
 ![Desktop Preview](docs/preview-desktop.png)
-```
 
 ### Mobile View
 
-> Add screenshot here
-
-```md
 ![Print Preview](docs/preview-mobile.png)
-```
 
 ### Spreadsheet View
 
-> Add screenshot here
-
-```md
 ![Spreadsheet View](docs/preview-spreadsheet.png)
-```
 
 ---
 
