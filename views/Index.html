@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="light">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Password Vault</title>
+
+<!-- Bootstrap 5 -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css"/>
+<!-- Font Awesome 6 -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+<!-- DataTables -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/datatables/1.10.21/css/dataTables.bootstrap5.min.css"/>
+<!-- SweetAlert2 -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/limonte-sweetalert2/11.10.1/sweetalert2.min.css"/>
+<!-- Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+<?!= include('css'); ?>
+
+</head>
+<body>
+
+<!-- ════════════════════ LOADING SCREEN ════════════════════ -->
+<div id="loading-screen">
+  <div class="vault-logo-anim"><i class="fa-solid fa-vault"></i></div>
+  <div class="loading-bar"><div class="loading-bar-fill"></div></div>
+  <div class="loading-text">Memulai aplikasi…</div>
+</div>
+
+<!-- ════════════════════ DENIED PAGE ════════════════════ -->
+<div id="denied-page" style="display:none;position:fixed;inset:0;z-index:9000;background:#0f1117;align-items:center;justify-content:center;">
+  <div class="denied-card">
+    <div class="denied-icon"><i class="fa-solid fa-ban"></i></div>
+    <h2>Akses Ditolak</h2>
+    <p>Akun Google Anda tidak memiliki izin untuk mengakses Password Vault ini.</p>
+    <div class="denied-email" id="denied-email-txt"></div>
+    <p style="margin-top:12px;font-size:12px;color:#475569;">Hubungi administrator jika Anda merasa ini adalah kesalahan.</p>
+  </div>
+</div>
+
+<!-- ════════════════════ LOCK SCREEN ════════════════════ -->
+<div id="lock-screen" style="display:none;position:fixed;inset:0;z-index:8000;background:rgba(9,11,18,.92);backdrop-filter:blur(12px);align-items:center;justify-content:center;flex-direction:column;gap:20px;">
+  <div class="lock-card">
+    <div class="lock-icon"><i class="fa-solid fa-lock"></i></div>
+    <h3>Sesi Terkunci</h3>
+    <p>Vault terkunci karena tidak ada aktivitas.</p>
+    <div class="lock-email" id="lock-email-txt"></div>
+    <div style="margin:14px 0;" id="lock-countdown-wrap">
+      <span class="countdown-badge"><i class="fa-regular fa-clock"></i> Auto-logout dalam <span id="lock-countdown">30</span>d</span>
+    </div>
+    <button id="unlock-btn" onclick="VaultApp.unlock()"><i class="fa-solid fa-unlock me-2"></i>Buka Kunci</button>
+  </div>
+</div>
+
+<!-- ════════════════════ COPY TOAST ════════════════════ -->
+<div class="copy-toast" id="copy-toast">
+  <i class="fa-solid fa-check-circle" style="color:#4caf50;"></i>
+  <span id="copy-toast-msg">Disalin ke clipboard</span>
+  <span class="copy-countdown" id="copy-countdown">30d</span>
+</div>
+
+<!-- ════════════════════ MAIN APP ════════════════════ -->
+<div id="app">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon"><i class="fa-solid fa-vault"></i></div>
+      <div>
+        <div class="brand-text">Password Vault</div>
+        <div class="brand-sub">ᗩris Ոur ᗰahendra</div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Menu</div>
+      <div class="nav-item active" data-page="dashboard">
+        <span class="nav-icon"><i class="fa-solid fa-chart-pie"></i></span> Dashboard
+      </div>
+      <div class="nav-item" data-page="vault">
+        <span class="nav-icon"><i class="fa-solid fa-key"></i></span> Semua Password
+        <span class="nav-badge" id="nb-vault">0</span>
+      </div>
+      <div class="nav-item" data-page="generator">
+        <span class="nav-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></span> Generator
+      </div>
+
+      <div class="nav-section-label">Kelola</div>
+      <div class="nav-item" data-page="trash">
+        <span class="nav-icon"><i class="fa-solid fa-trash-can"></i></span> Recycle Bin
+        <span class="nav-badge danger" id="nb-trash" style="display:none;">0</span>
+      </div>
+      <div class="nav-item" data-page="audit">
+        <span class="nav-icon"><i class="fa-solid fa-scroll"></i></span> Audit Log
+      </div>
+      <div class="nav-item" data-page="settings">
+        <span class="nav-icon"><i class="fa-solid fa-sliders"></i></span> Pengaturan
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-pill">
+        <div class="user-avatar" id="user-avatar-txt">?</div>
+        <div class="user-email" id="user-email-txt">-</div>
+        <button class="logout-btn" onclick="VaultApp.logout()" title="Logout"><i class="fa-solid fa-right-from-bracket"></i></button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <div class="main-content w-100">
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <button class="icon-btn d-md-none" id="sidebar-toggle" onclick="VaultApp.toggleSidebar()">
+        <i class="fa-solid fa-bars"></i>
+      </button>
+      <span class="topbar-title" id="topbar-title">Dashboard</span>
+
+      <div class="search-bar">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="global-search" placeholder="Cari situs, username…" autocomplete="off"/>
+      </div>
+
+      <div class="topbar-right">
+        <button class="icon-btn" id="theme-toggle-btn" onclick="VaultApp.toggleTheme()" title="Toggle tema">
+          <i class="fa-solid fa-moon" id="theme-icon"></i>
+        </button>
+        <button class="icon-btn" onclick="VaultApp.showPage('vault')" title="Tambah password">
+          <i class="fa-solid fa-plus"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- PAGE AREA -->
+    <div class="page-area">
+
+      <!-- ── DASHBOARD ── -->
+      <div id="page-dashboard" class="page-section">
+        <div class="row g-3 mb-4">
+          <div class="col-6 col-lg-3">
+            <div class="stat-card">
+              <div class="stat-icon purple"><i class="fa-solid fa-key"></i></div>
+              <div><div class="stat-count" id="stat-total">0</div><div class="stat-label">Total Password</div></div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="stat-card">
+              <div class="stat-icon red"><i class="fa-solid fa-triangle-exclamation"></i></div>
+              <div><div class="stat-count" id="stat-weak">0</div><div class="stat-label">Password Lemah</div></div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="stat-card">
+              <div class="stat-icon yellow"><i class="fa-solid fa-clock-rotate-left"></i></div>
+              <div><div class="stat-count" id="stat-expired">0</div><div class="stat-label">Perlu Diperbarui</div></div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="stat-card">
+              <div class="stat-icon green"><i class="fa-solid fa-shield-check"></i></div>
+              <div><div class="stat-count" id="stat-strong">0</div><div class="stat-label">Password Kuat</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-lg-8">
+            <div class="card-vault">
+              <div class="card-header-vault">
+                <i class="fa-solid fa-clock-rotate-left" style="color:var(--accent-1);"></i>
+                <h5>Password Kadaluarsa / Perlu Perhatian</h5>
+              </div>
+              <div class="card-body-vault">
+                <div id="dash-expiry-list"><div class="empty-state"><i class="fa-solid fa-check-circle"></i><p>Semua password masih segar!</p></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="card-vault">
+              <div class="card-header-vault">
+                <i class="fa-solid fa-tags" style="color:var(--accent-1);"></i>
+                <h5>Distribusi Kategori</h5>
+              </div>
+              <div class="card-body-vault">
+                <div id="dash-category-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── VAULT ── -->
+      <div id="page-vault" class="page-section" style="display:none;">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <div>
+            <h5 class="fw-bold mb-0" style="font-size:16px;">Semua Password</h5>
+            <small class="text-muted">Kelola semua credential Anda</small>
+          </div>
+          <div class="d-flex gap-2">
+            <select class="form-select form-select-sm" id="filter-category" style="width:140px;">
+              <option value="">Semua Kategori</option>
+              <option value="Social">Social</option>
+              <option value="Banking">Banking</option>
+              <option value="Work">Work</option>
+              <option value="Email">Email</option>
+              <option value="Shopping">Shopping</option>
+              <option value="Gaming">Gaming</option>
+              <option value="Other">Other</option>
+            </select>
+            <button class="btn-primary-vault" onclick="VaultApp.openAddModal()">
+              <i class="fa-solid fa-plus me-1"></i> Tambah
+            </button>
+          </div>
+        </div>
+
+        <div class="card-vault">
+          <div class="card-body-vault p-0">
+            <div style="overflow-x:auto;">
+              <table id="vault-table" class="table table-hover mb-0" style="width:100%;">
+                <thead>
+                  <tr>
+                    <th style="width:40px;"></th>
+                    <th>Situs</th>
+                    <th>Kategori</th>
+                    <th>Username</th>
+                    <th>Password</th>
+                    <th>Kedaluwarsa</th>
+                    <th style="width:120px;">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="vault-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── GENERATOR ── -->
+      <div id="page-generator" class="page-section" style="display:none;">
+        <div class="row justify-content-center">
+          <div class="col-lg-7">
+            <div class="card-vault">
+              <div class="card-header-vault">
+                <i class="fa-solid fa-wand-magic-sparkles" style="color:var(--accent-1);"></i>
+                <h5>Password Generator</h5>
+              </div>
+              <div class="card-body-vault">
+                <div class="gen-result mb-3">
+                  <span id="gen-output" style="flex:1;">Klik Generate untuk memulai</span>
+                  <button class="btn-action success" id="gen-copy-btn" onclick="VaultApp.copyGenPassword()" title="Salin"><i class="fa-solid fa-copy"></i></button>
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-label">Panjang Password: <strong id="gen-len-val">16</strong></label>
+                  <input type="range" class="form-range" id="gen-length" min="8" max="64" value="16" oninput="document.getElementById('gen-len-val').textContent=this.value"/>
+                </div>
+
+                <div class="row g-2 mb-3">
+                  <div class="col-6">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="gen-upper" checked/>
+                      <label class="form-check-label" for="gen-upper" style="font-size:13px;">Huruf Besar (A–Z)</label>
+                    </div>
+                  </div>
+                  <div class="col-6">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="gen-lower" checked/>
+                      <label class="form-check-label" for="gen-lower" style="font-size:13px;">Huruf Kecil (a–z)</label>
+                    </div>
+                  </div>
+                  <div class="col-6">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="gen-numbers" checked/>
+                      <label class="form-check-label" for="gen-numbers" style="font-size:13px;">Angka (0–9)</label>
+                    </div>
+                  </div>
+                  <div class="col-6">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="gen-symbols" checked/>
+                      <label class="form-check-label" for="gen-symbols" style="font-size:13px;">Simbol (!@#$…)</label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="d-flex gap-2">
+                  <button class="btn-primary-vault flex-grow-1" onclick="VaultApp.generatePassword()">
+                    <i class="fa-solid fa-rotate me-1"></i> Generate
+                  </button>
+                  <button class="btn-outline-vault" onclick="VaultApp.useGeneratedPassword()" id="use-gen-btn" disabled>
+                    <i class="fa-solid fa-file-import me-1"></i> Gunakan
+                  </button>
+                </div>
+
+                <div class="strength-meter mt-3" id="gen-strength-wrap" style="display:none;">
+                  <div class="strength-bar-wrap">
+                    <div class="strength-seg" id="gs1"></div><div class="strength-seg" id="gs2"></div>
+                    <div class="strength-seg" id="gs3"></div><div class="strength-seg" id="gs4"></div>
+                  </div>
+                  <div class="strength-label" id="gen-strength-label"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── TRASH ── -->
+      <div id="page-trash" class="page-section" style="display:none;">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <div>
+            <h5 class="fw-bold mb-0" style="font-size:16px;">Recycle Bin</h5>
+            <small class="text-muted">Entry dihapus permanen setelah 30 hari</small>
+          </div>
+          <button class="btn-outline-vault" style="border-color:#ff3b30;color:#ff3b30;" onclick="VaultApp.emptyTrash()">
+            <i class="fa-solid fa-trash me-1"></i> Kosongkan Semua
+          </button>
+        </div>
+        <div class="card-vault">
+          <div class="card-body-vault p-0">
+            <div style="overflow-x:auto;">
+              <table id="trash-table" class="table table-hover mb-0" style="width:100%;">
+                <thead>
+                  <tr>
+                    <th style="width:40px;"></th>
+                    <th>Situs</th>
+                    <th>Username</th>
+                    <th>Dihapus Pada</th>
+                    <th>Sisa Hari</th>
+                    <th style="width:80px;">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="trash-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── AUDIT LOG ── -->
+      <div id="page-audit" class="page-section" style="display:none;">
+        <div class="mb-3">
+          <h5 class="fw-bold mb-0" style="font-size:16px;">Audit Log</h5>
+          <small class="text-muted">500 aktivitas terbaru</small>
+        </div>
+        <div class="card-vault">
+          <div class="card-body-vault p-0">
+            <div style="overflow-x:auto;">
+              <table id="audit-table" class="table table-hover mb-0" style="width:100%;">
+                <thead>
+                  <tr>
+                    <th>Waktu</th>
+                    <th>Email</th>
+                    <th>Aksi</th>
+                    <th>Keterangan</th>
+                  </tr>
+                </thead>
+                <tbody id="audit-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── SETTINGS ── -->
+      <div id="page-settings" class="page-section" style="display:none;">
+        <div class="row justify-content-center">
+          <div class="col-lg-7">
+            <div class="card-vault mb-3">
+              <div class="card-header-vault">
+                <i class="fa-solid fa-shield-halved" style="color:var(--accent-1);"></i>
+                <h5>Keamanan & Sesi</h5>
+              </div>
+              <div class="card-body-vault">
+                <div class="setting-row">
+                  <div class="setting-label">
+                    <strong>Auto-lock Timer</strong>
+                    <span>Kunci otomatis setelah tidak aktif</span>
+                  </div>
+                  <div class="setting-control">
+                    <select class="form-select form-select-sm" id="set-autolock" style="width:130px;">
+                      <option value="0">Nonaktif</option>
+                      <option value="1">1 menit</option>
+                      <option value="2">2 menit</option>
+                      <option value="3">3 menit</option>
+                      <option value="5" selected>5 menit</option>
+                      <option value="10">10 menit</option>
+                      <option value="15">15 menit</option>
+                      <option value="30">30 menit</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-label">
+                    <strong>Hapus Clipboard</strong>
+                    <span>Otomatis bersihkan setelah salin</span>
+                  </div>
+                  <div class="setting-control">
+                    <select class="form-select form-select-sm" id="set-clipboard" style="width:130px;">
+                      <option value="0">Nonaktif</option>
+                      <option value="10">10 detik</option>
+                      <option value="20">20 detik</option>
+                      <option value="30" selected>30 detik</option>
+                      <option value="60">60 detik</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-vault mb-3">
+              <div class="card-header-vault">
+                <i class="fa-solid fa-key" style="color:var(--accent-1);"></i>
+                <h5>Password Default</h5>
+              </div>
+              <div class="card-body-vault">
+                <div class="setting-row">
+                  <div class="setting-label">
+                    <strong>Masa Berlaku Default</strong>
+                    <span>Digunakan saat tambah entry baru</span>
+                  </div>
+                  <div class="setting-control">
+                    <select class="form-select form-select-sm" id="set-expiry" style="width:130px;">
+                      <option value="30">30 hari</option>
+                      <option value="60">60 hari</option>
+                      <option value="90" selected>90 hari</option>
+                      <option value="180">180 hari</option>
+                      <option value="365">365 hari</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-label">
+                    <strong>Tampilkan Password</strong>
+                    <span>Tampilkan password secara default</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="set-showpwd"/>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-vault mb-3">
+              <div class="card-header-vault">
+                <i class="fa-solid fa-palette" style="color:var(--accent-1);"></i>
+                <h5>Tampilan</h5>
+              </div>
+              <div class="card-body-vault">
+                <div class="setting-row">
+                  <div class="setting-label">
+                    <strong>Mode Gelap</strong>
+                    <span>Aktifkan tema dark mode</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="set-darkmode" onchange="VaultApp.applyTheme(this.checked)"/>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-vault mb-3">
+              <div class="card-header-vault">
+                <i class="fa-solid fa-bolt" style="color:var(--accent-1);"></i>
+                <h5>Konfigurasi Quick Fill (pushData)</h5>
+              </div>
+              <div class="card-body-vault">
+                <div class="row g-2">
+                  <div class="col-md-6">
+                    <label class="form-label small">Nama Situs Default</label>
+                    <input type="text" class="form-control form-control-sm" id="set-pd-sitename">
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label small">URL Situs Default</label>
+                    <input type="text" class="form-control form-control-sm" id="set-pd-siteurl">
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label small">Kategori Default</label>
+                    <select class="form-select form-select-sm" id="set-pd-category">
+                      <option value="Other">Other</option>
+                      <option value="Social">Social</option>
+                      <option value="Banking">Banking</option>
+                      <option value="Work">Work</option>
+                      <option value="Email">Email</option>
+                      <option value="Shopping">Shopping</option>
+                      <option value="Gaming">Gaming</option>
+                    </select>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label small">Username Default</label>
+                    <input type="text" class="form-control form-control-sm" id="set-pd-username">
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label small">Favicon URL Default</label>
+                    <input type="text" class="form-control form-control-sm" id="set-pd-favicon">
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label small">Catatan Default</label>
+                    <textarea class="form-control form-control-sm" id="set-pd-notes" rows="1"></textarea>
+                  </div>
+                </div>
+                <div class="mt-2 text-muted" style="font-size:11px;">
+                  <i class="fa-info-circle me-1"></i> Klik icon <b>+</b> di header modal "Tambah Password" untuk mengisi kolom secara otomatis.
+                </div>
+              </div>
+            </div>
+
+            <button class="btn-primary-vault w-100" onclick="VaultApp.saveSettings()">
+              <i class="fa-solid fa-floppy-disk me-1"></i> Simpan Pengaturan
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /page-area -->
+  </div><!-- /main-content -->
+</div><!-- /app -->
+
+<!-- ════════════════════ MODAL ADD/EDIT ════════════════════ -->
+<div class="modal fade" id="entry-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="entry-modal-title"><i class="fa-solid fa-plus me-2" style="cursor:pointer;color:var(--accent-1);" onclick="VaultApp.pushData()" title="Gunakan Quick Fill"></i>Tambah Password Baru</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" style="filter:invert(50%);"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="entry-id"/>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Nama Situs *</label>
+            <input type="text" class="form-control" id="f-sitename" placeholder="Google, Facebook…"/>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">URL Situs</label>
+            <div class="input-group">
+              <input type="text" class="form-control" id="f-siteurl" placeholder="https://google.com"/>
+              <button class="btn btn-outline-secondary btn-sm" type="button" onclick="VaultApp.fetchFavicon()" title="Ambil favicon">
+                <i class="fa-solid fa-image"></i>
+              </button>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Kategori</label>
+            <select class="form-select" id="f-category">
+              <option value="Other">Other</option>
+              <option value="Social">Social</option>
+              <option value="Banking">Banking</option>
+              <option value="Work">Work</option>
+              <option value="Email">Email</option>
+              <option value="Shopping">Shopping</option>
+              <option value="Gaming">Gaming</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Username / Email *</label>
+            <input type="text" class="form-control" id="f-username" placeholder="user@example.com" autocomplete="off"/>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Password *</label>
+            <div class="input-group">
+              <input type="password" class="form-control" id="f-password" placeholder="Password" autocomplete="new-password" oninput="VaultApp.updateStrength(this.value,'modal')"/>
+              <button class="btn btn-toggle-pw" type="button" onclick="VaultApp.togglePwdField('f-password',this)"><i class="fa-solid fa-eye"></i></button>
+              <button class="btn btn-toggle-pw" type="button" onclick="VaultApp.openGeneratorInModal()" title="Generate"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
+            </div>
+            <div class="strength-meter" id="modal-strength-meter" style="display:none;">
+              <div class="strength-bar-wrap mt-1">
+                <div class="strength-seg" id="ms1"></div><div class="strength-seg" id="ms2"></div>
+                <div class="strength-seg" id="ms3"></div><div class="strength-seg" id="ms4"></div>
+              </div>
+              <div class="strength-label" id="modal-strength-label"></div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Masa Berlaku (hari)</label>
+            <input type="number" class="form-control" id="f-expiry" placeholder="90" min="1" max="365"/>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Favicon URL <small style="color:var(--text-muted);text-transform:none;font-weight:400;">(otomatis / isi manual)</small></label>
+            <div class="d-flex align-items-center gap-2">
+              <input type="text" class="form-control" id="f-favicon" placeholder="https://…" style="flex:1;"/>
+              <img id="favicon-preview" src="" alt="" width="28" height="28" style="border-radius:7px;display:none;border:1px solid var(--border);" onerror="this.style.display='none'"/>
+            </div>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Catatan</label>
+            <textarea class="form-control" id="f-notes" rows="2" placeholder="Catatan tambahan…"></textarea>
+          </div>
+
+          <!-- Breach Check -->
+          <div class="col-12">
+            <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;display:flex;align-items:center;gap:10px;">
+              <i class="fa-solid fa-shield-halved" style="color:var(--accent-1);"></i>
+              <span style="font-size:13px;color:var(--text-secondary);flex:1;">Periksa kebocoran password di HaveIBeenPwned</span>
+              <button class="btn-outline-vault" style="padding:5px 12px;font-size:12px;" onclick="VaultApp.checkBreach()">
+                <i class="fa-solid fa-magnifying-glass me-1"></i>Cek
+              </button>
+              <span id="breach-result" class="breach-loading"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-outline-vault" data-bs-dismiss="modal">Batal</button>
+        <button type="button" class="btn-primary-vault" id="entry-save-btn" onclick="VaultApp.saveEntry()">
+          <i class="fa-solid fa-floppy-disk me-1"></i> Simpan
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/datatables/1.10.21/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/limonte-sweetalert2/11.10.1/sweetalert2.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+<?!= include('script'); ?>
+</body>
+</html>

@@ -1,0 +1,41 @@
+
+# Dependency directories
+# Mengabaikan folder tertentu (dan seluruh isinya)
+node_modules/
+jspm_packages/
+node_modules/
+build/
+dist/
+
+# File Environment / Rahasia (SANGAT PENTING DITAMBAHKAN)
+# Mengabaikan file spesifik
+config.json
+secret_key.pem
+GEMINI.md
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# File Log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Folder Build / Output
+dist/
+build/
+out/
+
+# File Sistem Operasi
+# Ini untuk mengabaikan file konfigurasi MacOS
+.DS_Store
+Thumbs.db
+
+# Mengabaikan file dengan ekstensi tertentu
+*.mp4
+# Pengecualian (Jangan abaikan file ini)
+*.log
+!important-error.log
+

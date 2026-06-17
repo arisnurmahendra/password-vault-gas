@@ -1,0 +1,1205 @@
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   PASSWORD VAULT — Frontend SPA
+   Nemezis X Development Teams
+═══════════════════════════════════════════════════════════ */
+const VaultApp = (() => {
+  'use strict';
+
+  /* ── STATE ── */
+  let _state = {
+    email        : '',
+    sessionKey   : '',
+    compositeKey : '',
+    entries      : [],
+    trashEntries : [],
+    settings     : { 
+      autoLockMinutes:5, clipboardSeconds:30, defaultExpiryDays:90, darkMode:false, showPasswordDefault:false,
+      pdSiteName: '', pdSiteUrl: '', pdCategory: 'Other', pdUsername: '', pdNotes: '', pdFavicon: ''
+    },
+    genPassword  : '',
+    lastSessionRefresh: 0, // Timestamp of last successful session refresh
+    idleTimer    : null,
+    lockCountdown: null,
+    copyTimer    : null,
+    vaultTable   : null,
+    trashTable   : null,
+    auditTable   : null,
+    visiblePwds  : new Set(),
+    currentPage  : 'dashboard'
+  };
+
+  // Helper untuk memperbarui teks di loading screen
+  function _updateLoadingText(text, percent) {
+    const loadingTextEl = document.querySelector('#loading-screen .loading-text');
+    if (loadingTextEl) loadingTextEl.textContent = text;
+
+    const fillEl = document.querySelector('#loading-screen .loading-bar-fill');
+    if (fillEl && percent !== undefined) {
+      fillEl.style.width = percent + '%';
+    }
+  }
+
+  /* ── EXPIRY COLOR SCALE ── */
+  const EXPIRY_COLORS = [
+    { max:30,  hex:'#1565C0', label:'Baru Dibuat'  },
+    { max:60,  hex:'#2196F3', label:'Seperti Baru' },
+    { max:90,  hex:'#00BCD4', label:'Excellent'    },
+    { max:120, hex:'#2E7D32', label:'Sangat Segar' },
+    { max:150, hex:'#4CAF50', label:'Segar'        },
+    { max:180, hex:'#7ED321', label:'Baik'         },
+    { max:210, hex:'#BDD400', label:'Cukup'        },
+    { max:240, hex:'#FFE033', label:'Mulai Lama'   },
+    { max:270, hex:'#FFCC00', label:'Menua'        },
+    { max:300, hex:'#FF9500', label:'Lama'         },
+    { max:330, hex:'#FF6B35', label:'Sangat Lama'  },
+    { max:365, hex:'#FF3B30', label:'Kritis'       }
+  ];
+
+  /* ═══════════════════════════
+     INIT
+  ═══════════════════════════ */
+  function init() {
+    _updateLoadingText('Memverifikasi library...', 10);
+    // Visibilty change — mask on blur
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && _state.email) _maskAllPasswords();
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        document.getElementById('global-search').focus();
+      }
+      if (e.key === 'Escape') _resetLockTimer();
+    });
+
+    // Global search
+    $('#global-search').on('input', function() {
+      const q = $(this).val().toLowerCase();
+      if (_state.vaultTable) _state.vaultTable.search(q).draw();
+    });
+
+    // Filter category
+    $('#filter-category').on('change', function() {
+      const cat = $(this).val();
+      if (_state.vaultTable) {
+        _state.vaultTable.column(2).search(cat).draw();
+      }
+    });
+
+    // Screen capture hint
+    if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+      window.addEventListener('focus', () => {
+        if (_state.email) _resetLockTimer();
+      });
+    }
+
+    _verifyExternalLibraries();
+  }
+
+  // Memverifikasi apakah semua library eksternal sudah dimuat
+  function _verifyExternalLibraries() {
+    let allLibsLoaded = true;
+    const checks = [
+      { name: 'jQuery', obj: window.jQuery },
+      { name: 'Bootstrap JS', obj: window.bootstrap },
+      { name: 'DataTables JS', obj: window.jQuery && window.jQuery.fn && window.jQuery.fn.dataTable },
+      { name: 'SweetAlert2 JS', obj: window.Swal },
+      { name: 'CryptoJS', obj: window.CryptoJS }
+    ];
+
+    for (const check of checks) {
+      if (!check.obj) {
+        _showError(`Library ${check.name} gagal dimuat. Mohon refresh halaman.`);
+        allLibsLoaded = false;
+        break;
+      }
+    }
+
+    if (allLibsLoaded) {
+      _updateLoadingText('Memverifikasi sesi...', 25);
+      _authenticate();
+    }
+  }
+
+  /* ═══════════════════════════
+     AUTHENTICATION
+  ═══════════════════════════ */
+  function _authenticate() {
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (!r.success) {
+          _showDenied(r.data?.email || '');
+          return;
+        }
+        _state.email      = r.data.email;
+        _state.sessionKey = r.data.sessionKey;
+        _updateLoadingText('Memuat konfigurasi keamanan...', 40);
+        _loadCompositeKey();
+      })
+      .withFailureHandler(err => {
+        _showDenied('');
+        console.error('Auth error:', err);
+      })
+      .authenticateUser();
+  }
+
+  function _loadCompositeKey() {
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (!r.success) { _showDenied(''); return; }
+        _state.compositeKey = r.data.compositeKey;
+        _updateLoadingText('Memuat pengaturan pengguna...', 60);
+        _loadSettings();
+      })
+      .withFailureHandler(() => _showDenied(''))
+      .getDecryptionContext();
+  }
+
+  function _loadSettings() {
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (r.success) _state.settings = { ..._state.settings, ...r.data.settings };
+        else _showError('Gagal memuat pengaturan: ' + r.message);
+        _applyLoadedSettings();
+        _updateLoadingText('Memuat data vault...', 80);
+        _loadVaultData();
+      })
+      .withFailureHandler(err => {
+        _showError('Error memuat pengaturan: ' + err.message);
+        _updateLoadingText('Memuat data vault...', 80);
+        _loadVaultData();
+      })
+      .getSettings();
+  }
+
+  function _loadVaultData() {
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (!r.success) {
+          _showError('Gagal memuat vault: ' + r.message);
+          _updateLoadingText('Aplikasi siap!', 100);
+          _showApp();
+          _startIdleTimer();
+          return;
+        }
+        _state.entries = _decryptEntries(r.data.entries);
+        _buildVaultTable();
+        _updateDashboard();
+        _updateLoadingText('Memuat data Recycle Bin...', 95);
+        _loadTrash(true); // Muat trash dan kemudian tampilkan aplikasi
+      })
+      .withFailureHandler(err => _showError('Error: ' + err.message))
+      .getVaultEntries();
+  }
+
+  /* ═══════════════════════════
+     ENCRYPTION / DECRYPTION
+  ═══════════════════════════ */
+  function _encrypt(plaintext) {
+    if (!plaintext) return '';
+    return CryptoJS.AES.encrypt(String(plaintext), _state.compositeKey).toString();
+  }
+
+  function _decrypt(ciphertext) {
+    if (!ciphertext) return '';
+    try {
+      const bytes = CryptoJS.AES.decrypt(String(ciphertext), _state.compositeKey);
+      const decoded = bytes.toString(CryptoJS.enc.Utf8);
+      if (!decoded && ciphertext) return "Error: Decrypt Failed"; // Penanda jika key salah
+      return decoded || ciphertext;
+    } catch (e) { 
+      console.error("Decryption error:", e);
+      return ciphertext; 
+    }
+  }
+
+  function _decryptEntries(entries) {
+    return entries.map(e => ({
+      id           : e.id, // ID sudah didekripsi oleh server (XOR)
+      category     : _decrypt(e.category),
+      siteName     : _decrypt(e.siteName),
+      siteUrl      : _decrypt(e.siteUrl),
+      username     : _decrypt(e.username),
+      password     : _decrypt(e.password),
+      notes        : _decrypt(e.notes),
+      faviconUrl   : _decrypt(e.faviconUrl),
+      createdAt    : e.createdAt, // Tanggal sudah didekripsi oleh server
+      updatedAt    : e.updatedAt,
+      lastPwdChange: e.lastPwdChange,
+      expiryDays   : _decrypt(e.expiryDays),
+      deletedAt    : e.deletedAt || null,
+      deletedBy    : e.deletedBy || null
+    }));
+  }
+
+  function _encryptEntry(data) {
+    return {
+      category   : _encrypt(data.category),
+      siteName   : _encrypt(data.siteName),
+      siteUrl    : _encrypt(data.siteUrl),
+      username   : _encrypt(data.username),
+      password   : _encrypt(data.password),
+      notes      : _encrypt(data.notes),
+      faviconUrl : _encrypt(data.faviconUrl),
+      expiryDays : _encrypt(data.expiryDays)
+    };
+  }
+
+  /* ═══════════════════════════
+     UI TRANSITIONS
+  ═══════════════════════════ */
+  function _showApp() {
+    document.getElementById('loading-screen').style.display = 'none';
+    const app = document.getElementById('app');
+    app.style.display = 'flex';
+    document.getElementById('user-email-txt').textContent = _state.email;
+    document.getElementById('user-avatar-txt').textContent = _state.email[0].toUpperCase();
+    document.getElementById('lock-email-txt').textContent  = _state.email;
+    if (_state.settings.darkMode) {
+      document.documentElement.setAttribute('data-theme','dark');
+      document.getElementById('set-darkmode').checked = true;
+      document.getElementById('theme-icon').className = 'fa-solid fa-sun';
+    }
+  }
+
+  function _showDenied(email) {
+    document.getElementById('loading-screen').style.display = 'none';
+    const d = document.getElementById('denied-page');
+    d.style.display = 'flex';
+    if (email) document.getElementById('denied-email-txt').textContent = email;
+  }
+
+  function _showError(msg) {
+    document.getElementById('loading-screen').style.display = 'none';
+    Swal.fire({ icon:'error', title:'Terjadi Kesalahan', text: msg, background: _isDark() ? '#1a1d2e' : '#fff', color: _isDark() ? '#e8eaf6' : '#1a1d2e' });
+  }
+
+  function showPage(page) {
+    _resetLockTimer();
+    _state.currentPage = page;
+    document.querySelectorAll('.page-section').forEach(s => s.style.display = 'none');
+    document.getElementById('page-' + page).style.display = '';
+    document.querySelectorAll('.nav-item').forEach(n => {
+      n.classList.toggle('active', n.dataset.page === page);
+    });
+    const titles = { dashboard:'Dashboard', vault:'Semua Password', generator:'Password Generator', trash:'Recycle Bin', audit:'Audit Log', settings:'Pengaturan' };
+    document.getElementById('topbar-title').textContent = titles[page] || '';
+
+    if (page === 'trash')   _loadTrash();
+    // _loadTrash(false) adalah default, jadi tidak perlu dilewatkan secara eksplisit di sini
+    if (page === 'audit')   _loadAudit();
+    if (page === 'settings') _applyLoadedSettings();
+
+    // Close sidebar on mobile
+    if (window.innerWidth < 768) document.getElementById('sidebar').classList.remove('open');
+  }
+
+  function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+  }
+
+  /* ═══════════════════════════
+     DASHBOARD
+  ═══════════════════════════ */
+  function _updateDashboard() {
+    const entries = _state.entries;
+    let weak=0, expired=0, strong=0;
+
+    entries.forEach(e => {
+      const str = _getStrengthScore(e.password || '');
+      if (str <= 1) weak++;
+      if (str >= 3) strong++;
+      const exp = _getExpiryInfo(e.lastPwdChange, e.expiryDays);
+      if (exp && exp.daysSince > (parseInt(e.expiryDays)||90)) expired++;
+    });
+
+    $('#stat-total').text(entries.length);
+    $('#stat-weak').text(weak);
+    $('#stat-expired').text(expired);
+    $('#stat-strong').text(strong);
+    $('#nb-vault').text(entries.length);
+
+    // Expiry list
+    const expiryItems = entries
+      .map(e => ({ ...e, exp: _getExpiryInfo(e.lastPwdChange, e.expiryDays) }))
+      .filter(e => e.exp && e.exp.color !== '#9E9E9E' && e.exp.daysSince > (parseInt(e.expiryDays)||90) * 0.7)
+      .sort((a,b) => b.exp.daysSince - a.exp.daysSince)
+      .slice(0, 6);
+
+    if (expiryItems.length === 0) {
+      $('#dash-expiry-list').html('<div class="empty-state"><i class="fa-solid fa-check-circle" style="color:#4caf50;"></i><p>Semua password masih segar!</p></div>');
+    } else {
+      const html = expiryItems.map(e => `
+        <div class="d-flex align-items-center gap-3 py-2" style="border-bottom:1px solid var(--border);">
+          ${_faviconHtml(e.faviconUrl, e.siteName)}
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13.5px;font-weight:600;color:var(--text-primary);">${_esc(e.siteName)}</div>
+            <div style="font-size:12px;color:var(--text-muted);">${_esc(e.username)}</div>
+          </div>
+          <span class="expiry-badge" style="background:${e.exp.color}22;color:${e.exp.color};">
+            <i class="fa-solid fa-clock" style="font-size:10px;"></i> ${e.exp.label} (${e.exp.daysSince} hari)
+          </span>
+        </div>`).join('');
+      $('#dash-expiry-list').html(html);
+    }
+
+    // Category distribution
+    const cats = {};
+    entries.forEach(e => { const c = e.category || 'Other'; cats[c] = (cats[c]||0)+1; });
+    const total = entries.length || 1;
+    const catHtml = Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([cat,count]) => `
+      <div class="mb-2">
+        <div class="d-flex justify-content-between mb-1">
+          <span class="cat-badge cat-${cat.toLowerCase()}">${cat}</span>
+          <small style="color:var(--text-muted);">${count}</small>
+        </div>
+        <div style="height:4px;background:var(--border);border-radius:99px;overflow:hidden;">
+          <div style="height:100%;width:${Math.round(count/total*100)}%;background:var(--accent-1);border-radius:99px;transition:width .6s;"></div>
+        </div>
+      </div>`).join('');
+    $('#dash-category-list').html(catHtml || '<div class="empty-state" style="padding:20px;"><p>Belum ada data</p></div>');
+  }
+
+  /* ═══════════════════════════
+     VAULT TABLE
+  ═══════════════════════════ */
+  function _buildVaultTable() {
+    $('#vault-tbody').empty();
+    _state.entries.forEach(e => _appendVaultRow(e));
+
+    if (_state.vaultTable) {
+      _state.vaultTable.destroy();
+    }
+    _state.vaultTable = $('#vault-table').DataTable({
+      pageLength : 10,
+      lengthMenu : [[5,10,25,50],[5,10,25,50]],
+      language   : { search:'', searchPlaceholder:'Cari…', lengthMenu:'Tampilkan _MENU_', info:'_START_–_END_ dari _TOTAL_', paginate:{ previous:'‹', next:'›' } },
+      columnDefs : [{ orderable:false, targets:[0,6] }],
+      order      : [[1,'asc']]
+    });
+  }
+
+  function _appendVaultRow(e) {
+    const show = _state.settings.showPasswordDefault || _state.visiblePwds.has(e.id);
+    const expi = _getExpiryInfo(e.lastPwdChange, e.expiryDays);
+    const row = `<tr data-id="${_esc(e.id)}">
+      <td>${_faviconHtml(e.faviconUrl, e.siteName)}</td>
+      <td>
+        <div style="font-weight:600;font-size:13.5px;">${_esc(e.siteName)}</div>
+        ${e.siteUrl ? `<a href="${_esc(e.siteUrl)}" target="_blank" style="font-size:11px;color:var(--text-muted);">${_esc(e.siteUrl)}</a>` : ''}
+      </td>
+      <td><span class="cat-badge cat-${(e.category||'other').toLowerCase()}">${_esc(e.category||'Other')}</span></td>
+      <td>
+        <div class="d-flex align-items-center gap-2">
+          <span class="pwd-field">${_esc(e.username)}</span>
+          <button class="btn-action" onclick="VaultApp.copyToClipboard('${_escJs(e.username)}','Username')" title="Salin username"><i class="fa-regular fa-copy"></i></button>
+        </div>
+      </td>
+      <td>
+        <div class="d-flex align-items-center gap-2">
+          <span class="pwd-field ${show?'':'pwd-dots'}" id="pw-${_esc(e.id)}">${show ? _esc(e.password) : '••••••••'}</span>
+          <button class="btn-action" id="eye-${_esc(e.id)}" onclick="VaultApp.togglePwdVisible('${_escJs(e.id)}','${_escJs(e.password)}')" title="Lihat password">
+            <i class="fa-solid ${show?'fa-eye-slash':'fa-eye'}"></i>
+          </button>
+          <button class="btn-action" onclick="VaultApp.copyToClipboard('${_escJs(e.password)}','Password')" title="Salin password"><i class="fa-regular fa-copy"></i></button>
+        </div>
+      </td>
+      <td>${expi ? `<span class="expiry-badge" style="background:${expi.color}22;color:${expi.color};"><i class="fa-solid fa-circle" style="font-size:7px;"></i> ${expi.label}</span>` : '<span style="color:var(--text-muted);font-size:12px;">—</span>'}</td>
+      <td>
+        <div class="action-btns">
+          <button class="btn-action" onclick="VaultApp.openEditModal('${_escJs(e.id)}')" title="Edit"><i class="fa-solid fa-pen"></i></button>
+          <button class="btn-action danger" onclick="VaultApp.deleteEntry('${_escJs(e.id)}')" title="Hapus"><i class="fa-solid fa-trash"></i></button>
+        </div>
+      </td>
+    </tr>`;
+    $('#vault-tbody').append(row);
+  }
+
+  function _refreshVaultTable() {
+    if (_state.vaultTable) _state.vaultTable.destroy();
+    $('#vault-tbody').empty();
+    _state.entries.forEach(e => _appendVaultRow(e));
+    _state.vaultTable = $('#vault-table').DataTable({
+      pageLength:10, lengthMenu:[[5,10,25,50],[5,10,25,50]],
+      language:{ search:'', searchPlaceholder:'Cari…', lengthMenu:'Tampilkan _MENU_', info:'_START_–_END_ dari _TOTAL_', paginate:{ previous:'‹', next:'›' } },
+      columnDefs:[{ orderable:false, targets:[0,6] }], order:[[1,'asc']]
+    });
+    _updateDashboard();
+  }
+
+  /* ═══════════════════════════
+     CRUD
+  ═══════════════════════════ */
+  function openAddModal() {
+    _resetForm();
+    document.getElementById('entry-modal-title').innerHTML = '<i class="fa-solid fa-plus me-2" style="color:var(--accent-1);" onclick="VaultApp.pushData()"></i>Tambah Password Baru';
+    document.getElementById('entry-save-btn').innerHTML = '<i class="fa-solid fa-floppy-disk me-1"></i> Simpan';
+    document.getElementById('f-expiry').value = _state.settings.defaultExpiryDays;
+    new bootstrap.Modal(document.getElementById('entry-modal')).show();
+  }
+
+  function openEditModal(id) {
+    const e = _state.entries.find(x => x.id === id);
+    if (!e) return;
+    _resetForm();
+    document.getElementById('entry-id').value      = e.id;
+    document.getElementById('f-sitename').value    = e.siteName   || '';
+    document.getElementById('f-siteurl').value     = e.siteUrl    || '';
+    document.getElementById('f-category').value    = e.category   || 'Other';
+    document.getElementById('f-username').value    = e.username   || '';
+    document.getElementById('f-password').value    = e.password   || '';
+    document.getElementById('f-notes').value       = e.notes      || '';
+    document.getElementById('f-expiry').value      = e.expiryDays || '';
+    document.getElementById('f-favicon').value     = e.faviconUrl || '';
+    if (e.faviconUrl) {
+      const prev = document.getElementById('favicon-preview');
+      prev.src = e.faviconUrl; prev.style.display = '';
+    }
+    document.getElementById('entry-modal-title').innerHTML = '<i class="fa-solid fa-pen me-2" style="color:var(--accent-1);"></i>Edit Entry';
+    document.getElementById('entry-save-btn').innerHTML = '<i class="fa-solid fa-floppy-disk me-1"></i> Perbarui';
+    new bootstrap.Modal(document.getElementById('entry-modal')).show();
+  }
+
+  function saveEntry() {
+    const id       = document.getElementById('entry-id').value.trim();
+    const siteName = document.getElementById('f-sitename').value.trim();
+    const siteUrl = document.getElementById('f-siteurl').value.trim();
+    const username = document.getElementById('f-username').value.trim();
+    const password = document.getElementById('f-password').value.trim();
+
+    if (!siteName) { _toastError('Nama situs wajib diisi.'); return; }
+    if (!username) { _toastError('Username wajib diisi.'); return; }
+    if (!password) { _toastError('Password wajib diisi.'); return; }
+
+    // Duplicate detection
+    const dup = _state.entries.find(e => e.id !== id && (e.siteName === siteName || e.siteUrl === siteUrl) && e.username === username && e.password === password);
+    if (dup) {
+      Swal.fire({
+        icon:'warning', title:'Duplikat Terdeteksi',
+        html:`Password & username ini sudah digunakan di <strong>${_esc(dup.siteName)}</strong>.<br>Lanjutkan tetap menyimpan?`,
+        showCancelButton:true, confirmButtonText:'Ya, Simpan', cancelButtonText:'Batal',
+        background: _isDark() ? '#1a1d2e':'#fff', color: _isDark() ? '#e8eaf6':'#1a1d2e'
+      }).then(r => { if (r.isConfirmed) _doSaveEntry(id); });
+      return;
+    }
+    _doSaveEntry(id);
+  }
+
+  function _doSaveEntry(id) {
+    const data = {
+      category   : document.getElementById('f-category').value,
+      siteName   : document.getElementById('f-sitename').value.trim(),
+      siteUrl    : document.getElementById('f-siteurl').value.trim(),
+      username   : document.getElementById('f-username').value.trim(),
+      password   : document.getElementById('f-password').value.trim(),
+      notes      : document.getElementById('f-notes').value.trim(),
+      faviconUrl : document.getElementById('f-favicon').value.trim(),
+      expiryDays : document.getElementById('f-expiry').value || ''
+    };
+
+    const encrypted = _encryptEntry(data);
+    const btn = document.getElementById('entry-save-btn');
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> Menyimpan…';
+
+    if (!id) {
+      google.script.run
+        .withSuccessHandler(res => {
+          const r = _parse(res);
+          btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk me-1"></i> Simpan';
+          if (!r.success) { _toastError(r.message); return; }
+          // Tambahkan ke state lokal
+          _state.entries.push({ id: r.data.entryId, ...data, createdAt: r.data.createdAt, updatedAt: r.data.createdAt, lastPwdChange: r.data.createdAt });
+          bootstrap.Modal.getInstance(document.getElementById('entry-modal'))?.hide();
+          _refreshVaultTable();
+          _toast('Entry berhasil ditambahkan!', 'success');
+        })
+        .withFailureHandler(err => { btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-floppy-disk me-1"></i> Simpan'; _toastError(err.message); })
+        .addVaultEntry(encrypted);
+    } else {
+      const oldPwd = _state.entries.find(e => e.id === id)?.password;
+      const pwdChanged = oldPwd !== data.password;
+      google.script.run
+        .withSuccessHandler(res => {
+          const r = _parse(res);
+          btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk me-1"></i> Perbarui';
+          if (!r.success) { _toastError(r.message); return; }
+          const idx = _state.entries.findIndex(e => e.id === id);
+          if (idx !== -1) _state.entries[idx] = { ..._state.entries[idx], ...data, updatedAt: r.data.updatedAt };
+          bootstrap.Modal.getInstance(document.getElementById('entry-modal'))?.hide();
+          _refreshVaultTable();
+          _toast('Entry berhasil diperbarui!', 'success');
+        })
+        .withFailureHandler(err => { btn.disabled=false; _toastError(err.message); })
+        .updateVaultEntry(id, encrypted, pwdChanged);
+    }
+  }
+
+  function deleteEntry(id) {
+    const e = _state.entries.find(x => x.id === id);
+    Swal.fire({
+      icon:'warning', title:'Pindah ke Recycle Bin?',
+      html:`Entry <strong>${_esc(e?.siteName||id)}</strong> akan dipindah ke Recycle Bin.<br><small style="color:#9ca3af;">Akan dihapus permanen setelah 30 hari.</small>`,
+      showCancelButton:true, confirmButtonText:'Ya, Hapus', cancelButtonText:'Batal',
+      confirmButtonColor:'#ff3b30',
+      background: _isDark()?'#1a1d2e':'#fff', color: _isDark()?'#e8eaf6':'#1a1d2e'
+    }).then(r => {
+      if (!r.isConfirmed) return;
+      google.script.run
+        .withSuccessHandler(res => {
+          const result = _parse(res);
+          if (!result.success) { _toastError(result.message); return; }
+          _state.entries = _state.entries.filter(x => x.id !== id);
+          _refreshVaultTable();
+          _toast('Entry dipindahkan ke Recycle Bin.');
+        })
+        .withFailureHandler(err => _toastError(err.message))
+        .deleteVaultEntry(id);
+    });
+  }
+
+  /* ═══════════════════════════
+     TRASH
+  ═══════════════════════════ */
+  function _loadTrash(val = false) {
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (!r.success) return;
+        _state.trashEntries = _decryptEntries(r.data.entries);
+        _buildTrashTable();
+        const cnt = _state.trashEntries.length;
+        if (cnt > 0) { $('#nb-trash').text(cnt).show(); } else { $('#nb-trash').hide(); }
+        if (val) {
+          _showApp();
+          _startIdleTimer();
+        }
+      })
+      .withFailureHandler(() => {})
+      .getTrashEntries();
+  }
+
+  function _buildTrashTable() {
+    if (_state.trashTable) _state.trashTable.destroy();
+    $('#trash-tbody').empty();
+    _state.trashEntries.forEach(e => {
+      const deletedAt  = e.deletedAt ? new Date(e.deletedAt) : null;
+      const remaining  = deletedAt ? 30 - Math.floor((Date.now() - deletedAt) / 86400000) : '?';
+      const dateStr    = deletedAt ? deletedAt.toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+      $('#trash-tbody').append(`<tr>
+        <td>${_faviconHtml(e.faviconUrl, e.siteName)}</td>
+        <td><div style="font-weight:600;">${_esc(e.siteName)}</div></td>
+        <td><span style="font-family:var(--font-mono);font-size:12px;">${_esc(e.username)}</span></td>
+        <td style="font-size:12px;color:var(--text-muted);">${dateStr}</td>
+        <td><span style="color:${remaining<=7?'#ff3b30':'var(--text-secondary)'};font-weight:600;font-size:13px;">${remaining}h</span></td>
+        <td>
+          <div class="action-btns">
+            <button class="btn-action success" onclick="VaultApp.restoreEntry('${_escJs(e.id)}')" title="Restore"><i class="fa-solid fa-rotate-left"></i></button>
+            <button class="btn-action danger" onclick="VaultApp.permDeleteEntry('${_escJs(e.id)}')" title="Hapus Permanen"><i class="fa-solid fa-trash"></i></button>
+          </div>
+        </td>
+      </tr>`);
+    });
+    _state.trashTable = $('#trash-table').DataTable({
+      pageLength:10, language:{ search:'', searchPlaceholder:'Cari…', lengthMenu:'Tampilkan _MENU_', info:'_START_–_END_ dari _TOTAL_', paginate:{ previous:'‹', next:'›' } },
+      columnDefs:[{ orderable:false, targets:[0,5] }]
+    });
+  }
+
+  function restoreEntry(id) {
+    Swal.fire({
+      icon:'question', title:'Restore Entry?',
+      text:'Entry ini akan dipulihkan ke vault.', showCancelButton:true,
+      confirmButtonText:'Ya, Restore', cancelButtonText:'Batal',
+      background:_isDark()?'#1a1d2e':'#fff', color:_isDark()?'#e8eaf6':'#1a1d2e'
+    }).then(r => {
+      if (!r.isConfirmed) return;
+      google.script.run
+        .withSuccessHandler(res => {
+          const result = _parse(res);
+          if (!result.success) { _toastError(result.message); return; }
+          _toast('Entry dipulihkan ke vault!', 'success');
+          _loadTrash(); _loadVaultData();
+        })
+        .withFailureHandler(err => _toastError(err.message))
+        .restoreTrashEntry(id);
+    });
+  }
+
+  function permDeleteEntry(id) {
+    const e = _state.trashEntries.find(x => x.id === id);
+    Swal.fire({
+      icon:'error', title:'Hapus Permanen?',
+      html:`Entry <strong>${_esc(e?.siteName||id)}</strong> akan <strong>dihapus permanen</strong> dan tidak dapat dipulihkan!`,
+      showCancelButton:true, confirmButtonText:'Hapus Permanen', cancelButtonText:'Batal',
+      confirmButtonColor:'#ff3b30',
+      background:_isDark()?'#1a1d2e':'#fff', color:_isDark()?'#e8eaf6':'#1a1d2e'
+    }).then(r => {
+      if (!r.isConfirmed) return;
+      google.script.run
+        .withSuccessHandler(res => {
+          const result = _parse(res);
+          if (!result.success) { _toastError(result.message); return; }
+          _toast('Entry dihapus permanen.');
+          _loadTrash();
+        })
+        .withFailureHandler(err => _toastError(err.message))
+        .permanentDeleteEntry(id);
+    });
+  }
+
+  function emptyTrash() {
+    Swal.fire({
+      icon:'warning', title:'Kosongkan Recycle Bin?',
+      text:'Semua entry di Recycle Bin akan dihapus permanen.',
+      showCancelButton:true, confirmButtonText:'Kosongkan', cancelButtonText:'Batal',
+      confirmButtonColor:'#ff3b30',
+      background:_isDark()?'#1a1d2e':'#fff', color:_isDark()?'#e8eaf6':'#1a1d2e'
+    }).then(r => {
+      if (!r.isConfirmed) return;
+      google.script.run
+        .withSuccessHandler(res => {
+          const result = _parse(res);
+          if (!result.success) { _toastError(result.message); return; }
+          _toast('Recycle Bin dikosongkan.');
+          _loadTrash();
+        })
+        .withFailureHandler(err => _toastError(err.message))
+        .emptyTrash();
+    });
+  }
+
+  /* ═══════════════════════════
+     AUDIT LOG
+  ═══════════════════════════ */
+  function _loadAudit() {
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (!r.success) return;
+        if (_state.auditTable) _state.auditTable.destroy();
+        $('#audit-tbody').empty();
+        r.data.logs.forEach(log => {
+          const ts = log.timestamp ? new Date(log.timestamp).toLocaleString('id-ID') : '—';
+          $('#audit-tbody').append(`<tr>
+            <td style="font-size:12px;color:var(--text-muted);white-space:nowrap;">${ts}</td>
+            <td style="font-size:12px;font-family:var(--font-mono);">${_esc(log.email)}</td>
+            <td><span class="audit-action audit-${log.action}">${log.action}</span></td>
+            <td style="font-size:12px;color:var(--text-secondary);">${_esc(log.notes)}</td>
+          </tr>`);
+        });
+        _state.auditTable = $('#audit-table').DataTable({
+          pageLength:20, order:[[0,'desc']],
+          language:{ search:'', searchPlaceholder:'Filter…', lengthMenu:'Tampilkan _MENU_', info:'_START_–_END_ dari _TOTAL_', paginate:{ previous:'‹', next:'›' } }
+        });
+      })
+      .withFailureHandler(() => {})
+      .getAuditLog();
+  }
+
+  /* ═══════════════════════════
+     SETTINGS
+  ═══════════════════════════ */
+  function _applyLoadedSettings() {
+    const s = _state.settings;
+    const setVal = (id, val) => { const el = document.getElementById(id); if(el) el.value = val; };
+    setVal('set-autolock',  s.autoLockMinutes);
+    setVal('set-clipboard', s.clipboardSeconds);
+    setVal('set-expiry',    s.defaultExpiryDays);
+    const dm = document.getElementById('set-darkmode');
+    if (dm) dm.checked = s.darkMode;
+    const sp = document.getElementById('set-showpwd');
+    if (sp) sp.checked = s.showPasswordDefault;
+    
+    $('#set-pd-sitename').val(s.pdSiteName || '');
+    $('#set-pd-siteurl').val(s.pdSiteUrl || '');
+    $('#set-pd-category').val(s.pdCategory || 'Other');
+    $('#set-pd-username').val(s.pdUsername || '');
+    $('#set-pd-notes').val(s.pdNotes || '');
+    $('#set-pd-favicon').val(s.pdFavicon || '');
+  }
+
+  function saveSettings() {
+    const settings = {
+      autoLockMinutes    : parseInt($('#set-autolock').val()),
+      clipboardSeconds   : parseInt($('#set-clipboard').val()),
+      defaultExpiryDays  : parseInt($('#set-expiry').val()),
+      darkMode           : $('#set-darkmode').is(':checked'),
+      showPasswordDefault: $('#set-showpwd').is(':checked'),
+      pdSiteName         : $('#set-pd-sitename').val(),
+      pdSiteUrl          : $('#set-pd-siteurl').val(),
+      pdCategory         : $('#set-pd-category').val(),
+      pdUsername         : $('#set-pd-username').val(),
+      pdNotes            : $('#set-pd-notes').val(),
+      pdFavicon          : $('#set-pd-favicon').val()
+    };
+    _state.settings = settings;
+    _resetIdleTimer();
+
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (r.success) _toast('Pengaturan disimpan!', 'success');
+        else _toastError(r.message);
+      })
+      .withFailureHandler(err => _toastError(err.message))
+      .saveSettings(settings);
+  }
+
+  function applyTheme(dark) {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.getElementById('theme-icon').className = dark ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+    _state.settings.darkMode = dark;
+  }
+
+  function toggleTheme() {
+    const dark = document.documentElement.getAttribute('data-theme') !== 'dark';
+    applyTheme(dark);
+    const dm = document.getElementById('set-darkmode');
+    if (dm) dm.checked = dark;
+  }
+
+  /* ═══════════════════════════
+     PASSWORD VISIBILITY
+  ═══════════════════════════ */
+  function togglePwdVisible(id, password) {
+    const span = document.getElementById('pw-' + id);
+    const btn  = document.getElementById('eye-' + id);
+    if (!span) return;
+    if (_state.visiblePwds.has(id)) {
+      _state.visiblePwds.delete(id);
+      span.textContent = '••••••••';
+      span.classList.add('pwd-dots'); span.classList.remove('pwd-field');
+      btn.innerHTML = '<i class="fa-solid fa-eye"></i>';
+    } else {
+      _state.visiblePwds.add(id);
+      span.textContent = password;
+      span.classList.remove('pwd-dots'); span.classList.add('pwd-field');
+      btn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+    }
+    _resetLockTimer();
+  }
+
+  function togglePwdField(fieldId, btn) {
+    const input = document.getElementById(fieldId);
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.innerHTML = show ? '<i class="fa-solid fa-eye-slash"></i>' : '<i class="fa-solid fa-eye"></i>';
+  }
+
+  function _maskAllPasswords() {
+    _state.visiblePwds.clear();
+    document.querySelectorAll('[id^="pw-"]').forEach(span => {
+      span.textContent = '••••••••';
+      span.classList.add('pwd-dots');
+    });
+    document.querySelectorAll('[id^="eye-"]').forEach(btn => {
+      btn.innerHTML = '<i class="fa-solid fa-eye"></i>';
+    });
+  }
+
+  /* ═══════════════════════════
+     CLIPBOARD
+  ═══════════════════════════ */
+  function copyToClipboard(text, label) {
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      _showCopyToast(label || 'Teks');
+      _resetLockTimer();
+    }).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta);
+      _showCopyToast(label || 'Teks');
+    });
+  }
+
+  function _showCopyToast(label) {
+    const toast     = document.getElementById('copy-toast');
+    const msg       = document.getElementById('copy-toast-msg');
+    const countdown = document.getElementById('copy-countdown');
+    const secs      = parseInt(_state.settings.clipboardSeconds);
+
+    msg.textContent = `${label} disalin ke clipboard`;
+    if (_state.copyTimer) { clearInterval(_state.copyTimer); _state.copyTimer = null; }
+
+    if (secs === 0) {
+      countdown.style.display = 'none';
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+      return;
+    }
+
+    countdown.style.display = 'inline-block';
+    countdown.textContent = secs + 'd';
+    toast.classList.add('show');
+
+    let remain = secs;
+    _state.copyTimer = setInterval(() => {
+      remain--;
+      countdown.textContent = remain + 'd';
+      if (remain <= 0) {
+        clearInterval(_state.copyTimer);
+        _state.copyTimer = null;
+        toast.classList.remove('show');
+        navigator.clipboard.writeText('').catch(()=>{});
+      }
+    }, 1000);
+  }
+
+  /* ═══════════════════════════
+     AUTO-LOCK
+  ═══════════════════════════ */
+  function _startIdleTimer() {
+    ['mousemove','keydown','click','touchstart','scroll'].forEach(ev => {
+      document.addEventListener(ev, _resetLockTimer, { passive:true });
+    });
+    _resetLockTimer();
+  }
+
+  function _resetIdleTimer() { _resetLockTimer(); }
+
+  function _resetLockTimer() {
+    if (!_state.email) return;
+    if (_state.idleTimer) { clearTimeout(_state.idleTimer); _state.idleTimer = null; }
+    
+    const lockMins = parseInt(_state.settings.autoLockMinutes);
+    if (lockMins > 0) {
+      const ms = lockMins * 60 * 1000;
+      _state.idleTimer = setTimeout(_triggerLock, ms);
+    }
+
+    // Keep server session alive, but only if it hasn't been refreshed recently (e.g., last 30 seconds)
+    const now = Date.now();
+    if (now - _state.lastSessionRefresh > 30 * 1000) { // Throttle to once every 30 seconds
+      google.script.run
+        .withSuccessHandler(() => {
+          _state.lastSessionRefresh = Date.now();
+        })
+        .withFailureHandler(err => console.error("Failed to refresh session:", err))
+        .refreshSession();
+    }
+  }
+
+  function _triggerLock() {
+    const ls = document.getElementById('lock-screen');
+    ls.style.display = 'flex';
+    _maskAllPasswords();
+    _startLockCountdown();
+  }
+
+  function _startLockCountdown() {
+    let secs = 30;
+    document.getElementById('lock-countdown').textContent = secs;
+    if (_state.lockCountdown) clearInterval(_state.lockCountdown);
+    _state.lockCountdown = setInterval(() => {
+      secs--;
+      const el = document.getElementById('lock-countdown');
+      if (el) el.textContent = secs;
+      if (secs <= 0) {
+        clearInterval(_state.lockCountdown);
+        logout();
+      }
+    }, 1000);
+  }
+
+  function unlock() {
+    if (_state.lockCountdown) clearInterval(_state.lockCountdown);
+    document.getElementById('lock-screen').style.display = 'none';
+    _resetLockTimer();
+    google.script.run.refreshSession();
+  }
+
+  /* ═══════════════════════════
+     LOGOUT
+  ═══════════════════════════ */
+  function logout() {
+    Swal.fire({
+      icon:'question', title:'Logout?',
+      text:'Sesi Anda akan diakhiri.', showCancelButton:true,
+      confirmButtonText:'Logout', cancelButtonText:'Batal',
+      background:_isDark()?'#1a1d2e':'#fff', color:_isDark()?'#e8eaf6':'#1a1d2e'
+    }).then(r => {
+      if (!r.isConfirmed) return;
+      google.script.run
+        .withSuccessHandler(() => {
+          document.getElementById('app').style.display = 'none';
+          document.getElementById('denied-page').style.display = 'flex';
+          document.getElementById('denied-email-txt').textContent = 'Anda telah logout.';
+        })
+        .logoutUser();
+    });
+  }
+
+  /* ═══════════════════════════
+     PASSWORD GENERATOR
+  ═══════════════════════════ */
+  function generatePassword() {
+    const len     = parseInt(document.getElementById('gen-length').value) || 16;
+    const upper   = document.getElementById('gen-upper').checked;
+    const lower   = document.getElementById('gen-lower').checked;
+    const numbers = document.getElementById('gen-numbers').checked;
+    const symbols = document.getElementById('gen-symbols').checked;
+
+    let chars = '';
+    if (upper)   chars += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    if (lower)   chars += 'abcdefghijklmnopqrstuvwxyz';
+    if (numbers) chars += '0123456789';
+    if (symbols) chars += '!@#$%^&*()_+-=[]{}|;:,.<>?';
+    if (!chars)  chars  = 'abcdefghijklmnopqrstuvwxyz';
+
+    let pwd = '';
+    const arr = new Uint32Array(len);
+    window.crypto.getRandomValues(arr);
+    arr.forEach(n => { pwd += chars[n % chars.length]; });
+
+    _state.genPassword = pwd;
+    document.getElementById('gen-output').textContent = pwd;
+    document.getElementById('use-gen-btn').disabled = false;
+
+    updateStrength(pwd, 'gen');
+    document.getElementById('gen-strength-wrap').style.display = '';
+  }
+
+  function copyGenPassword() {
+    if (!_state.genPassword) return;
+    copyToClipboard(_state.genPassword, 'Password generator');
+  }
+
+  function useGeneratedPassword() {
+    if (!_state.genPassword) return;
+    // Buka modal add dan isi password
+    openAddModal();
+    setTimeout(() => {
+      document.getElementById('f-password').value = _state.genPassword;
+      updateStrength(_state.genPassword, 'modal');
+    }, 300);
+  }
+
+  function openGeneratorInModal() {
+    showPage('generator');
+    bootstrap.Modal.getInstance(document.getElementById('entry-modal'))?.hide();
+  }
+
+  /* ═══════════════════════════
+     PASSWORD STRENGTH
+  ═══════════════════════════ */
+  function updateStrength(pwd, prefix) {
+    const score = _getStrengthScore(pwd);
+    const labels = ['','Sangat Lemah','Lemah','Sedang','Kuat','Sangat Kuat'];
+    const colors = ['','#ff3b30','#ff9500','#ffcc00','#4caf50','#2196f3'];
+
+    const p = prefix === 'modal' ? 'm' : 'g';
+    const meterWrap = document.getElementById(prefix === 'modal' ? 'modal-strength-meter' : 'gen-strength-wrap');
+
+    if (!pwd) {
+      if (meterWrap) meterWrap.style.display = 'none';
+      return;
+    }
+    if (meterWrap) meterWrap.style.display = '';
+
+    for (let i = 1; i <= 4; i++) {
+      const seg = document.getElementById(p+'s'+i);
+      if (seg) seg.style.background = i <= score ? colors[score] : 'var(--border)';
+    }
+    const lbl = document.getElementById(prefix === 'modal' ? 'modal-strength-label' : 'gen-strength-label');
+    if (lbl) { lbl.textContent = labels[score] || ''; lbl.style.color = colors[score] || 'var(--text-muted)'; }
+  }
+
+  function _getStrengthScore(pwd) {
+    if (!pwd) return 0;
+    let score = 0;
+    if (pwd.length >= 8)  score++;
+    if (pwd.length >= 14) score++;
+    if (/[A-Z]/.test(pwd) && /[a-z]/.test(pwd)) score++;
+    if (/[0-9]/.test(pwd)) score++;
+    if (/[^A-Za-z0-9]/.test(pwd)) score++;
+    return Math.min(score, 4);
+  }
+
+  /* ═══════════════════════════
+     BREACH CHECK (HIBP)
+  ═══════════════════════════ */
+  async function checkBreach() {
+    const pwd = document.getElementById('f-password').value;
+    if (!pwd) { _toastError('Isi password terlebih dahulu.'); return; }
+
+    const resultEl = document.getElementById('breach-result');
+    resultEl.className = 'breach-loading';
+    resultEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Memeriksa…';
+
+    try {
+      // k-anonymity: hanya kirim 5 karakter pertama dari SHA-1 hash
+      const msgBuf  = new TextEncoder().encode(pwd);
+      const hashBuf = await window.crypto.subtle.digest('SHA-1', msgBuf);
+      const hash    = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,'0')).join('').toUpperCase();
+      const prefix  = hash.slice(0, 5);
+      const suffix  = hash.slice(5);
+
+      const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
+        headers: { 'Add-Padding': 'true' }
+      });
+      if (!res.ok) throw new Error('API error');
+
+      const text    = await res.text();
+      const matched = text.split('\r\n').find(line => line.split(':')[0] === suffix);
+
+      if (matched) {
+        const count = parseInt(matched.split(':')[1], 10);
+        resultEl.className = 'breach-pwned';
+        resultEl.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> Bocor ${count.toLocaleString('id-ID')}×`;
+      } else {
+        resultEl.className = 'breach-safe';
+        resultEl.innerHTML = '<i class="fa-solid fa-circle-check"></i> Aman';
+      }
+    } catch {
+      resultEl.className = 'breach-loading';
+      resultEl.textContent = 'Gagal memeriksa';
+    }
+  }
+
+  /* ═══════════════════════════
+     FAVICON
+  ═══════════════════════════ */
+  function fetchFavicon() {
+    const url = document.getElementById('f-siteurl').value.trim();
+    if (!url) { _toastError('Isi URL situs terlebih dahulu.'); return; }
+
+    google.script.run
+      .withSuccessHandler(res => {
+        const r = _parse(res);
+        if (!r.success) return;
+        document.getElementById('f-favicon').value = r.data.faviconUrl;
+        const prev = document.getElementById('favicon-preview');
+        prev.src = r.data.faviconUrl; prev.style.display = '';
+      })
+      .withFailureHandler(() => {})
+      .fetchFaviconUrl(url);
+  }
+
+  
+
+  /**
+   * Mengisi form modal secara otomatis berdasarkan pengaturan Quick Fill.
+   */
+  function pushData() {
+    const s = _state.settings;
+    
+    // Set values ke form modal
+    document.getElementById('f-sitename').value = s.pdSiteName || '';
+    document.getElementById('f-siteurl').value  = s.pdSiteUrl || '';
+    document.getElementById('f-username').value = s.pdUsername || '';
+    document.getElementById('f-notes').value    = s.pdNotes || '';
+    document.getElementById('f-favicon').value  = s.pdFavicon || '';
+    $('#f-category').val(s.pdCategory || 'Other').change();
+    
+    if (s.pdFavicon) {
+      const prev = document.getElementById('favicon-preview');
+      if (prev) { prev.src = s.pdFavicon; prev.style.display = ''; }
+    }
+    _toast('Formulir diisi otomatis via Quick Fill', 'info');
+  }
+
+  /* ═══════════════════════════
+     HELPERS
+  ═══════════════════════════ */
+  function _getExpiryInfo(lastPwdChange, expiryDays) {
+    if (!lastPwdChange || !expiryDays) return null;
+    const last = new Date(lastPwdChange);
+    if (isNaN(last)) return null;
+    const daysSince = Math.floor((Date.now() - last) / 86400000);
+    const expDays   = parseInt(expiryDays) || 90;
+
+    // Map to color scale
+    for (const c of EXPIRY_COLORS) {
+      if (daysSince <= c.max) return { daysSince, color: c.hex, label: c.label };
+    }
+    return { daysSince, color:'#FF3B30', label:'Kritis' };
+  }
+
+  function _faviconHtml(faviconUrl, siteName) {
+    if (faviconUrl) {
+      return `<img src="${_esc(faviconUrl)}" class="vault-row-favicon" alt="${_esc(siteName)}" onerror="this.style.display='none';this.nextSibling.style.display='inline-flex'"/><span class="favicon-placeholder" style="display:none;"><i class="fa-solid fa-globe"></i></span>`;
+    }
+    return `<span class="favicon-placeholder"><i class="fa-solid fa-globe"></i></span>`;
+  }
+
+  function _parse(res) {
+    try { return typeof res === 'string' ? JSON.parse(res) : res; }
+    catch { return { success:false, message:'Parse error' }; }
+  }
+
+  function _esc(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function _escJs(str) {
+    if (!str) return '';
+    return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"');
+  }
+
+  function _isDark() {
+    return document.documentElement.getAttribute('data-theme') === 'dark';
+  }
+
+  function _resetForm() {
+    ['entry-id','f-sitename','f-siteurl','f-username','f-password','f-notes','f-expiry','f-favicon'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    document.getElementById('f-category').value = 'Other';
+    document.getElementById('favicon-preview').style.display = 'none';
+    document.getElementById('breach-result').textContent = '';
+    document.getElementById('modal-strength-meter').style.display = 'none';
+  }
+
+  function _toast(msg, type) {
+    const icon = type === 'success' ? 'success' : 'info';
+    Swal.fire({
+      toast:true, position:'bottom-end', icon, title:msg,
+      showConfirmButton:false, timer:2500, timerProgressBar:true,
+      background: _isDark()?'#1a1d2e':'#fff', color: _isDark()?'#e8eaf6':'#1a1d2e'
+    });
+  }
+
+  function _toastError(msg) {
+    Swal.fire({
+      toast:true, position:'bottom-end', icon:'error', title: msg||'Terjadi kesalahan',
+      showConfirmButton:false, timer:3500,
+      background: _isDark()?'#1a1d2e':'#fff', color: _isDark()?'#e8eaf6':'#1a1d2e'
+    });
+  }
+
+  /* PUBLIC API */
+  return {
+    init, showPage, toggleSidebar, toggleTheme, applyTheme,
+    openAddModal, openEditModal, saveEntry, deleteEntry,
+    restoreEntry, permDeleteEntry, emptyTrash,
+    togglePwdVisible, togglePwdField,
+    copyToClipboard, copyGenPassword,
+    generatePassword, useGeneratedPassword, openGeneratorInModal,
+    updateStrength, checkBreach, fetchFavicon,
+    saveSettings, logout, unlock, pushData
+  };
+})();
+
+// ── NAV ──
+document.querySelectorAll('.nav-item[data-page]').forEach(el => {
+  el.addEventListener('click', () => VaultApp.showPage(el.dataset.page));
+});
+
+// ── START ──
+window.addEventListener('load', () => VaultApp.init());
+
+
+
+</script>

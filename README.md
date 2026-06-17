@@ -53,66 +53,58 @@ A secure, personal password management solution built entirely on Google Apps Sc
 ## Project Structure
 
 ```text
-password-vault/
+password-vault-gas/
 │
-├── gas/ (or root)
-│   ├── Code.gs             # Server-side logic & API
+├── gas/
+│   ├── Kode.js             # Server-side logic (Google Apps Script)
 │   └── appsscript.json     # Manifest file
+│
+├── docs/                   # Screenshots and documentation assets
+│   ├── preview-desktop.png
+│   ├── preview-mobile.png
+│   └── preview-spreadsheet.png                 
 │
 ├── views/
 │   ├── Index.html          # Main Entry Point
-│   ├── Style.html          # CSS Styles
-│   └── Script.html         # Frontend Logic
+│   ├── css.html            # UI Styles & Theme definitions
+│   └── Script.html         # Frontend Logic & SPA Controller
 │
-├── LICENSE
 ├── CHANGELOG.md
 └── README.md
 ```
 
 ---
 
-## Print Layout Workflow
+## Security Workflow
 
-```text
-Normal View
-      │
-      ▼
-Before Print Event
-      │
-      ▼
-Dynamic Section Reordering
-      │
-      ▼
-Multi-Column Print Layout
-      │
-      ▼
-Browser Print Engine
-      │
-      ▼
-PDF / Printer Output
-      │
-      ▼
-After Print Event
-      │
-      ▼
-Restore Original Layout
-```
+Aplikasi ini menggunakan mekanisme keamanan berlapis untuk memastikan data sensitif Anda tidak pernah tersimpan dalam bentuk teks biasa (plain-text):
+
+1.  **Client-Side Encryption:** Password dienkripsi di browser menggunakan kunci sesi sebelum dikirim ke server.
+2.  **Server-Side Relay:** Google Apps Script menerima data terenkripsi.
+3.  **Double-Layer Encryption:** Data dienkripsi kembali menggunakan kunci unik yang disimpan di `ScriptProperties` sebelum ditulis ke Google Sheets.
+4.  **Decryption:** Proses dibalik saat data dipanggil, memerlukan autentikasi yang valid dan sesi aktif.
 
 ---
 
-## Print Section Order
+## Spreadsheet Requirements
 
-When printing, the application automatically rearranges content into the following order:
+Untuk menjalankan aplikasi ini, Google Sheet Anda harus memiliki sheet dengan nama dan struktur kolom sebagai berikut:
 
-1. Contact
-2. Profile Summary
-3. Skills
-4. Applied Skills
-5. Education
-6. Experience
-7. Achievements
+### 1. Main Vault (`vault`)
+Menyimpan semua kredensial utama dalam kondisi terenkripsi.
+*   **Headers:** `entry_id`, `category`, `site_name`, `site_url`, `username`, `password`, `notes`, `favicon_url`, `created_at`, `updated_at`, `last_pwd_change`, `expiry_days`
 
-This ensures a professional reading flow and optimal page utilization.
+### 2. Audit Log (`audit_log`)
+Mencatat setiap aktivitas akses untuk keperluan audit keamanan.
+*   **Headers:** `timestamp`, `email`, `action`, `entry_id`, `notes`, `user_agent`
+
+### 3. Recycle Bin (`recycle_bin`)
+Penyimpanan sementara untuk data yang dihapus (Retensi 30 hari).
+*   **Headers:** `entry_id`, `category`, `site_name`, `site_url`, `username`, `password`, `notes`, `favicon_url`, `created_at`, `updated_at`, `last_pwd_change`, `expiry_days`, `deleted_at`, `deleted_by`
+
+### 4. User Settings (`settings`)
+Konfigurasi personalisasi per akun pengguna.
+*   **Headers:** `email`, `auto_lock_minutes`, `clipboard_seconds`, `default_expiry_days`, `dark_mode`, `show_password_default`, `pd_sitename`, `pd_siteurl`, `pd_category`, `pd_username`, `pd_notes`, `pd_favicon`
 
 ---
 
@@ -126,12 +118,20 @@ This ensures a professional reading flow and optimal page utilization.
 ![Desktop Preview](docs/preview-desktop.png)
 ```
 
-### Print Preview
+### Mobile View
 
 > Add screenshot here
 
 ```md
-![Print Preview](docs/preview-print.png)
+![Print Preview](docs/preview-mobile.png)
+```
+
+### Spreadsheet View
+
+> Add screenshot here
+
+```md
+![Spreadsheet View](docs/preview-spreadsheet.png)
 ```
 
 ---
@@ -141,7 +141,7 @@ This ensures a professional reading flow and optimal page utilization.
 ### Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/interactive-cv.git
+git clone https://github.com/arisnurmahendra/password-vault-gas.git
 ```
 
 ### Deploy to Google Apps Script
@@ -156,12 +156,11 @@ git clone https://github.com/yourusername/interactive-cv.git
 
 ## Future Improvements
 
-- Dark mode support
-- Additional language packs
-- Portfolio gallery integration
-- Dynamic CV generator from Google Sheets
-- Download as PDF button
-- Theme customization
+- **Biometric Auth Integration:** Menggunakan WebAuthn API untuk login via Fingerprint/FaceID.
+- **Batch Import/Export:** Fitur untuk migrasi data dari file CSV (Chrome/Bitwarden export).
+- **Multi-User Collaboration:** Fitur berbagi *folder* atau kredensial tertentu dengan user whitelist lainnya.
+- **Browser Extension:** Integrasi langsung sebagai ekstensi browser untuk fitur *auto-fill*.
+- **Mobile App (PWA):** Optimasi lebih lanjut untuk pengalaman aplikasi native di perangkat mobile.
 
 ---
 
@@ -187,15 +186,18 @@ See the LICENSE file for more information.
 ## Acknowledgements
 
 - Google Apps Script
-- Bootstrap
-- Font Awesome
-- jQuery
+- Bootstrap 5 & Font Awesome 6
+- jQuery & DataTables
+- SweetAlert2 (Modals & Notifications)
+- CryptoJS (Client-side encryption)
 - Open Source Community
 
 ---
 
 ### Version
 
-Current Version: **v1.0.0**
+Current Version: **1.0.0.2**
 
-Release Date: **June 2026**
+Release Date: **2026-06-17**
+
+*See CHANGELOG.md for full history.*
