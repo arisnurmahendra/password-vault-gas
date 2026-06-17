@@ -122,6 +122,10 @@ Konfigurasi personalisasi per akun pengguna.
 
 ![Spreadsheet View](docs/preview-spreadsheet.png)
 
+### Denied View
+
+![Spreadsheet View](docs/preview-auth_denied.png)
+
 ---
 
 ## Deployment
