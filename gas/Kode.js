@@ -647,21 +647,138 @@ function fetchFaviconUrl(url) {
 
     if (!url || typeof url !== 'string') return _fail('URL tidak valid.');
 
-    // Sanitasi URL
     const cleanUrl = url.trim().replace(/[<>"']/g, '');
-    let domain;
+    let fullUrl = cleanUrl;
 
-    try {
-      const urlObj = new URL(cleanUrl.startsWith('http') ? cleanUrl : 'https://' + cleanUrl);
-      domain = urlObj.hostname;
-    } catch {
-      return _fail('Format URL tidak valid.');
+    if (!fullUrl.toLowerCase().startsWith('http')) {
+      fullUrl = 'https://' + fullUrl;
     }
 
-    // Gunakan Google Favicon service (aman, tidak expose user ke situs target)
-    const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+    const decodeHtmlEntities = (value) => {
+      return String(value || '')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
 
-    return _ok({ faviconUrl, domain });
+    const getHostname = (value) => {
+      const match = String(value || '').match(/^(?:https?:\/\/)?([^\/?#]+)/i);
+      return match ? match[1].replace(/^www\./i, '').toLowerCase() : '';
+    };
+
+    const resolveUrl = (baseUrl, href) => {
+      const trimmedHref = String(href || '').trim();
+      if (!trimmedHref) return '';
+
+      if (/^(https?:)?\/\//i.test(trimmedHref)) {
+        return trimmedHref.replace(/^https?:\/\//i, 'https://');
+      }
+
+      if (trimmedHref.startsWith('/')) {
+        const originMatch = String(baseUrl || '').match(/^(https?:\/\/[^\/]+)/i);
+        return originMatch ? originMatch[1] + trimmedHref : trimmedHref;
+      }
+
+      const base = String(baseUrl || '').trim();
+      if (!base) return trimmedHref;
+      if (base.endsWith('/')) return base + trimmedHref;
+
+      const lastSlash = base.lastIndexOf('/');
+      if (lastSlash === -1) return base + '/' + trimmedHref;
+      return base.substring(0, lastSlash + 1) + trimmedHref;
+    };
+
+    try {
+      const response = UrlFetchApp.fetch(fullUrl, {
+        muteHttpExceptions: true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        },
+        followRedirects: true,
+        validateHttpsCertificates: false
+      });
+
+      if (response.getResponseCode() !== 200) {
+        throw new Error(`Gagal mengakses URL: ${response.getResponseCode()}`);
+      }
+
+      const htmlContent = response.getContentText();
+      const headMatch = htmlContent.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+      const headContent = headMatch ? headMatch[1] : htmlContent;
+      const domain = getHostname(fullUrl);
+
+      let title = '';
+      const titleMatch = headContent.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      if (titleMatch && titleMatch[1]) {
+        title = decodeHtmlEntities(titleMatch[1]);
+      }
+
+      if (!title) {
+        const ogTitleMatch = headContent.match(/(?:property|name)=['"]og:title['"][^>]*content=['"]([^'"]*)['"]/i);
+        if (ogTitleMatch && ogTitleMatch[1]) {
+          title = decodeHtmlEntities(ogTitleMatch[1]);
+        }
+      }
+
+      if (!title) {
+        const twitterTitleMatch = headContent.match(/(?:property|name)=['"]twitter:title['"][^>]*content=['"]([^'"]*)['"]/i);
+        if (twitterTitleMatch && twitterTitleMatch[1]) {
+          title = decodeHtmlEntities(twitterTitleMatch[1]);
+        }
+      }
+
+      if (!title) {
+        title = domain.replace(/^www\./, '').split('.')[0];
+        title = title.charAt(0).toUpperCase() + title.slice(1);
+      }
+
+      let faviconUrl = '';
+      const linkTags = headContent.match(/<link\b[^>]*>/gi) || [];
+
+      for (let i = 0; i < linkTags.length; i++) {
+        const tag = linkTags[i];
+        const relMatch = tag.match(/rel\s*=\s*['"]([^'"]+)['"]/i);
+        const hrefMatch = tag.match(/href\s*=\s*['"]([^'"]+)['"]/i);
+        const rel = relMatch ? relMatch[1].toLowerCase() : '';
+        const href = hrefMatch ? hrefMatch[1] : '';
+
+        if (!href) continue;
+
+        const relTokens = rel.split(/\s+/);
+        const isFaviconRel = relTokens.some(token => ['icon', 'shortcut icon', 'shortcut-icon', 'apple-touch-icon', 'apple-touch-icon-precomposed', 'mask-icon'].includes(token));
+
+        if (isFaviconRel) {
+          faviconUrl = resolveUrl(fullUrl, href);
+          if (faviconUrl) break;
+        }
+      }
+
+      if (!faviconUrl) {
+        faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+      }
+
+      return _ok({
+        faviconUrl: faviconUrl,
+        domain: domain,
+        title: title
+      });
+
+    } catch (fetchError) {
+      const domain = getHostname(fullUrl);
+      const title = domain.replace(/^www\./, '').split('.')[0];
+      const formattedTitle = title.charAt(0).toUpperCase() + title.slice(1);
+
+      return _ok({
+        faviconUrl: `https://www.google.com/s2/favicons?domain=${domain}&sz=64`,
+        domain: domain,
+        title: formattedTitle
+      });
+    }
 
   } catch (e) {
     return _fail('Error fetch favicon: ' + e.message);

@@ -1070,23 +1070,88 @@ const VaultApp = (() => {
   /* ═══════════════════════════
      FAVICON
   ═══════════════════════════ */
-  function fetchFavicon() {
+function fetchFavicon() {
     const url = document.getElementById('f-siteurl').value.trim();
     if (!url) { _toastError('Isi URL situs terlebih dahulu.'); return; }
+
+    const siteUrlInput = document.getElementById('f-siteurl');
+    const siteNameInput = document.getElementById('f-sitename');
+    const faviconInput = document.getElementById('f-favicon');
+    const preview = document.getElementById('favicon-preview');
+    let timeoutId = null;
+
+    const setLoadingState = (loading) => {
+      siteUrlInput.readOnly = loading;
+      siteUrlInput.style.opacity = loading ? '0.7' : '';
+      siteUrlInput.style.cursor = loading ? 'wait' : '';
+
+      siteNameInput.value = loading ? 'Mengambil data...' : siteNameInput.value;
+      siteNameInput.readOnly = loading;
+      siteNameInput.style.opacity = loading ? '0.7' : '';
+      siteNameInput.style.cursor = loading ? 'wait' : '';
+
+      faviconInput.value = loading ? 'Mengambil favicon...' : faviconInput.value;
+      faviconInput.readOnly = loading;
+      faviconInput.style.opacity = loading ? '0.7' : '';
+      faviconInput.style.cursor = loading ? 'wait' : '';
+
+      if (preview) {
+        preview.style.opacity = loading ? '0.5' : '';
+      }
+    };
+
+    const clearLoadingState = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      document.getElementById('f-favicon').value = '';
+      document.getElementById('f-sitename').value = '';
+      setLoadingState(false);
+    };
+
+    setLoadingState(true);
+    timeoutId = setTimeout(() => {
+      clearLoadingState();
+      _toastError('Waktu mengambil favicon habis (10 detik).');
+    }, 10000);
 
     google.script.run
       .withSuccessHandler(res => {
         const r = _parse(res);
-        if (!r.success) return;
-        document.getElementById('f-favicon').value = r.data.faviconUrl;
-        const prev = document.getElementById('favicon-preview');
-        prev.src = r.data.faviconUrl; prev.style.display = '';
+        clearLoadingState();
+        if (!r.success) {
+          _toastError(r.message || 'Gagal mengambil favicon.');
+          return;
+        }
+
+        document.getElementById('f-favicon').value = r.data.faviconUrl || '';
+        document.getElementById('f-sitename').value = r.data.title || r.data.domain || extractDomainName(r.data.faviconUrl || '');
+        if (preview) {
+          preview.src = r.data.faviconUrl || '';
+          preview.style.display = r.data.faviconUrl ? '' : 'none';
+        }
       })
-      .withFailureHandler(() => {})
+      .withFailureHandler(() => {
+        clearLoadingState();
+        _toastError('Gagal mengambil favicon.');
+      })
       .fetchFaviconUrl(url);
   }
 
-  
+  // Helper function to extract domain name from URL if not provided
+  function extractDomainName(url) {
+    try {
+      const urlObj = new URL(url);
+      let hostname = urlObj.hostname;
+      // Remove common prefixes like www, mail, etc.
+      hostname = hostname.replace(/^www\./, '').replace(/^mail\./, '').replace(/^blog\./, '');
+      // Capitalize first letter of each word
+      return hostname.split('.').slice(0, -1).join(' ').replace(/\b\w/g, l => l.toUpperCase());
+    } catch {
+      return '';
+    }
+  }
 
   /**
    * Mengisi form modal secara otomatis berdasarkan pengaturan Quick Fill.

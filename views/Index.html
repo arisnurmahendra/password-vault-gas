@@ -19,6 +19,98 @@
 
 <?!= include('css'); ?>
 
+
+<style>
+  .vault-table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 14px;
+  }
+
+  #vault-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  #vault-table thead th {
+    white-space: nowrap;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  #vault-table tbody td {
+    vertical-align: middle;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  #vault-table .pwd-field {
+    word-break: break-all;
+  }
+
+  #vault-table .action-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+
+  @media (max-width: 768px) {
+    #vault-table {
+      min-width: 0;
+      display: block;
+    }
+
+    #vault-table thead {
+      display: none;
+    }
+
+    #vault-table tbody {
+      display: block;
+      width: 100%;
+    }
+
+    #vault-table tr {
+      display: block;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    #vault-table td {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      padding: 8px 0;
+      border: none;
+    }
+
+    #vault-table td::before {
+      content: attr(data-label);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      min-width: 90px;
+      flex-shrink: 0;
+    }
+
+    #vault-table td:last-child {
+      justify-content: flex-end;
+    }
+
+    #vault-table .action-btns {
+      justify-content: flex-end;
+    }
+  }
+</style>
+
 </head>
 <body>
 
@@ -218,7 +310,7 @@
 
         <div class="card-vault">
           <div class="card-body-vault p-0">
-            <div style="overflow-x:auto;">
+            <div class="vault-table-scroll">
               <table id="vault-table" class="table table-hover mb-0" style="width:100%;">
                 <thead>
                   <tr>
